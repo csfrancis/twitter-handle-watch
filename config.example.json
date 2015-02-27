@@ -1,0 +1,24 @@
+{
+	"smtp": {
+		"host": "smtp.gmail.com",
+		"port": 587,
+		"domain": "gmail.com",
+		"user": "user@gmail.com",
+		"password": "password",
+		"ssl": true
+	},
+	"twitter_api": {
+		"key": "api_key",
+		"secret": "api_secret"
+	},
+	"handles" : [
+		{
+			"handle": "twitter_username",
+			"notifies": "user@gmail.com"
+		},
+		{
+			"handle": "another_twitter_username",
+			"notifies": "user@gmail.com"
+		},
+	]
+}

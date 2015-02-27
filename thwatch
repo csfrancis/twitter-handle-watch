@@ -1,0 +1,98 @@
+#!/usr/bin/env ruby
+#
+# Uses the Twitter API to periodically check if a handle is available
+#
+
+require 'net/http'
+require 'net/smtp'
+require 'json'
+require 'getoptlong'
+
+config_file = Dir.home + '/.thwatch.config.json'
+
+opts = GetoptLong.new(
+  [ '--config', '-c', GetoptLong::OPTIONAL_ARGUMENT ]
+)
+
+opts.each do |opt, arg|
+  case opt
+  when '--config'
+    config_file = arg
+  end
+end
+
+unless File.exist?(config_file)
+  STDERR.puts "cannot open config file #{config}"
+  exit(-1)
+end
+
+$config = JSON.parse(File.read(config_file), symbolize_names: true)
+
+def with_twitter_api(&block)
+  res = Net::HTTP.start('api.twitter.com', 443, use_ssl: true) do |http|
+    block.call http
+  end
+
+  return [] if res.code == '404'
+  raise StandardError, "Twitter API call failed with code #{res.code}" unless res.code == '200'
+
+  JSON.parse(res.body)
+end
+
+def get_bearer_token(api_key, api_secret)
+  with_twitter_api { |http|
+    req = Net::HTTP::Post.new('/oauth2/token')
+    req.basic_auth(api_key, api_secret)
+    req.set_form_data({'grant_type' => 'client_credentials'})
+    http.request(req)
+  }['access_token']
+end
+
+def check_handles(handles, token)
+  res = with_twitter_api { |http|
+    req = Net::HTTP::Post.new('/1.1/users/lookup.json')
+    req['Authorization'] = "Bearer #{token}"
+    req.set_form_data({'screen_name' => handles.join(',')})
+    http.request(req)
+  }
+  handles - res.map {|h| h['screen_name']}
+end
+
+def send_notification(handle, smtp_config)
+  message = <<-EOF
+From: Twitter Handle Watch #{smtp_config[:user]}
+To: #{handle[:notifies]}
+Subject: Twitter handle #{handle[:handle]} is now available!
+
+This is a message to notify you that the Twitter handle #{handle[:handle]} is now available!
+
+EOF
+  smtp = Net::SMTP.new(smtp_config[:host], smtp_config[:port])
+  smtp.enable_starttls if smtp_config[:ssl]
+  smtp.start(smtp_config[:domain], smtp_config[:user], smtp_config[:password], :login) do |smtp|
+    smtp.send_message(message, smtp_config[:user], handle[:notifies])
+  end
+  puts "sent email to #{handle}"
+  true
+end
+
+def watch(token)
+  while true do
+    begin
+      handles = $config[:handles].map {|h| h[:handle]}
+      available_handles = check_handles(handles, token)
+      available_handles.each { |name|
+        handle = $config[:handles].find {|h| h[:handle] == name}
+        next if handle[:notified]
+        handle[:notified] = send_notification(handle, $config[:smtp])
+      }
+    rescue StandardError => e
+      STDERR.puts "rescued: #{e.inspect}:\n  #{e.backtrace.join("\n  ")}"
+    end
+    sleep 20
+  end
+end
+
+trap (:INT) { exit(0) }
+token = get_bearer_token($config[:twitter_api][:key], $config[:twitter_api][:secret])
+watch(token)
